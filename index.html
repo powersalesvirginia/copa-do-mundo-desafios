@@ -602,9 +602,10 @@
 
 <p class="legend">
   <b>Como funciona:</b> DESAFIO é a meta do dia, RESULTADO é o valor realizado (editados na aba GERENCIAL). O ATINGIMENTO
-  (Resultado ÷ Desafio) decide o confronto. Vitória = 3 pontos · Empate = 1 ponto · Derrota = 0 pontos. No
-  <b>desafio individual</b>, a pessoa compete com a própria meta: atingiu = 1 ponto, não atingiu = 0 pontos.
-  Tudo é salvo automaticamente — pode fechar e voltar quando quiser.
+  (Resultado ÷ Desafio) decide o confronto. Só pontua quem bate 100% ou mais da própria meta: se ninguém bater, ninguém
+  pontua; se um bater e o outro não, quem bateu leva 3 pontos; se os dois baterem, o de maior atingimento leva os 3
+  pontos e o outro fica com 0. No <b>desafio individual</b>, a pessoa compete com a própria meta: atingiu = 1 ponto,
+  não atingiu = 0 pontos. Tudo é salvo automaticamente — pode fechar e voltar quando quiser.
 </p>
 <footer class="appfoot">Copa do Mundo Desafios · Campos Gerais</footer>
 
@@ -897,6 +898,26 @@
     return { val: val, atingiu: val >= 1 };
   }
 
+  // Confronto: só pontua quem bateu 100% (ou mais) da própria meta.
+  // - Nenhum dos dois bateu -> ninguém pontua.
+  // - Só um bateu -> esse ganha 3 pontos, o outro 0.
+  // - Os dois bateram -> quem tiver o maior atingimento ganha 3, o outro 0.
+  //   Empate exato entre os dois (batendo ou não) -> ninguém pontua.
+  function matchScoreOutcome(oc){
+    if (oc.aVal === null || oc.bVal === null) return null;
+    var aHit = oc.aVal >= 1, bHit = oc.bVal >= 1;
+    var aPts = 0, bPts = 0, winner = null;
+    if (aHit && bHit){
+      if (oc.aVal > oc.bVal){ aPts = 3; winner = "a"; }
+      else if (oc.bVal > oc.aVal){ bPts = 3; winner = "b"; }
+    } else if (aHit && !bHit){
+      aPts = 3; winner = "a";
+    } else if (bHit && !aHit){
+      bPts = 3; winner = "b";
+    }
+    return { aPts:aPts, bPts:bPts, winner:winner, aHit:aHit, bHit:bHit };
+  }
+
   function computeRanking(){
     var stats = {};
     PLAYERS.forEach(function(p){
@@ -913,16 +934,17 @@
           if (bName && stats[bName] !== undefined && item.b.resultado !== "") {
             stats[bName].volume += (toNumber(item.b.resultado) || 0);
           }
-          if (oc.result === null) return;
-          if (oc.result === "draw"){
-            if (aName && stats[aName]) { stats[aName].emp++; stats[aName].pts += 1; }
-            if (bName && stats[bName]) { stats[bName].emp++; stats[bName].pts += 1; }
-          } else if (oc.result === "a"){
-            if (aName && stats[aName]) { stats[aName].vit++; stats[aName].pts += 3; }
+          var so = matchScoreOutcome(oc);
+          if (so === null) return;
+          if (so.winner === "a"){
+            if (aName && stats[aName]) { stats[aName].vit++; stats[aName].pts += so.aPts; }
             if (bName && stats[bName]) { stats[bName].der++; }
-          } else if (oc.result === "b"){
-            if (bName && stats[bName]) { stats[bName].vit++; stats[bName].pts += 3; }
+          } else if (so.winner === "b"){
+            if (bName && stats[bName]) { stats[bName].vit++; stats[bName].pts += so.bPts; }
             if (aName && stats[aName]) { stats[aName].der++; }
+          } else {
+            if (aName && stats[aName]) { stats[aName].emp++; }
+            if (bName && stats[bName]) { stats[bName].emp++; }
           }
         } else if (item.type === "solo" || item.type === "bye"){
           var name = item.name;
@@ -930,9 +952,9 @@
           if (item.resultado !== "" && item.resultado !== undefined){
             stats[name].volume += (toNumber(item.resultado) || 0);
           }
-          var so = soloOutcome(item);
-          if (so.atingiu === null) return;
-          stats[name].pts += so.atingiu ? 1 : 0;
+          var so2 = soloOutcome(item);
+          if (so2.atingiu === null) return;
+          stats[name].pts += so2.atingiu ? 1 : 0;
         }
       });
     });
@@ -1074,20 +1096,37 @@
     }
 
     var aPct = fmtPct(oc.aVal), bPct = fmtPct(oc.bVal);
-    if (oc.result === "draw"){
+    var so = matchScoreOutcome(oc);
+
+    // Ninguém bateu 100% da meta: sem Vitória/Derrota, mostra o nome de cada um
+    // (verde = maior conversão, vermelho = menor, amarelo se empatarem exatamente). 0 pontos pros dois.
+    if (!so.aHit && !so.bHit){
+      var aCls, bCls;
+      if (oc.aVal === oc.bVal){ aCls = "draw"; bCls = "draw"; }
+      else { aCls = oc.aVal > oc.bVal ? "win" : "loss"; bCls = oc.bVal > oc.aVal ? "win" : "loss"; }
       return '<div class="status-strip">' +
-        '<span class="badge draw">Empate · ' + aPct + '</span>' +
-        '<span class="badge draw">Empate · ' + bPct + '</span>' +
+        '<span class="badge ' + aCls + '">' + escapeHtml(aName) + ' · ' + aPct + ' · +0 pontos</span>' +
+        '<span class="badge ' + bCls + '">' + escapeHtml(bName) + ' · ' + bPct + ' · +0 pontos</span>' +
       '</div>';
     }
-    var aClass = oc.result === "a" ? "win" : "loss";
-    var bClass = oc.result === "b" ? "win" : "loss";
-    var aLabel = oc.result === "a" ? "Vitória" : "Derrota";
-    var bLabel = oc.result === "b" ? "Vitória" : "Derrota";
-    var winnerName = oc.result === "a" ? aName : bName;
+
+    // Os dois bateram 100%+ e empataram exatamente: ninguém pontua, mas os dois "bateram a meta".
+    if (so.aHit && so.bHit && oc.aVal === oc.bVal){
+      return '<div class="status-strip">' +
+        '<span class="badge draw">Empate · ' + aPct + ' · +0 pontos</span>' +
+        '<span class="badge draw">Empate · ' + bPct + ' · +0 pontos</span>' +
+      '</div>';
+    }
+
+    // Vitória de verdade: bateu 100%+ e teve a maior conversão entre quem bateu.
+    var aClass = so.winner === "a" ? "win" : "loss";
+    var bClass = so.winner === "b" ? "win" : "loss";
+    var aLabel = so.winner === "a" ? "Vitória" : "Derrota";
+    var bLabel = so.winner === "b" ? "Vitória" : "Derrota";
+    var winnerName = so.winner === "a" ? aName : bName;
     return '<div class="status-strip">' +
-      '<span class="badge ' + aClass + '">' + aLabel + ' · ' + aPct + '</span>' +
-      '<span class="badge ' + bClass + '">' + bLabel + ' · ' + bPct + '</span>' +
+      '<span class="badge ' + aClass + '">' + aLabel + ' · ' + aPct + ' · +' + so.aPts + ' pontos</span>' +
+      '<span class="badge ' + bClass + '">' + bLabel + ' · ' + bPct + ' · +' + so.bPts + ' pontos</span>' +
       '<div class="winner-line">🏆 ' + escapeHtml(winnerName) + '</div>' +
     '</div>';
   }
