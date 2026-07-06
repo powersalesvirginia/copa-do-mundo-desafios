@@ -699,7 +699,7 @@
         changed = true;
       }
     }
-    if (changed) scheduleSave();
+    if (changed && !safeMode) scheduleSave();
   }
 
   async function attemptLogin(username, password){
@@ -727,6 +727,10 @@
 
   var apiConfigured = (API_URL && API_URL.indexOf("COLE_AQUI") === -1 && /^https?:\/\//.test(API_URL));
   var consecutiveFailures = 0;
+  // "Modo seguro": se o carregamento inicial FALHAR (rede/planilha fora do ar),
+  // NÃO podemos salvar — senão gravaríamos dados de exemplo por cima dos reais.
+  // Enquanto safeMode for true, todo salvamento fica bloqueado.
+  var safeMode = false;
 
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
 
@@ -743,17 +747,26 @@
     if (!apiConfigured) return defaultState();
     try{
       var raw = await fetchState();
+      // Só tratamos como "vazio de verdade" (primeira vez) quando o backend
+      // respondeu com sucesso, porém sem conteúdo. Aí é seguro criar o padrão.
       if (raw){
         var parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.rounds)){
           lastSyncedJSON = raw;
           return parsed;
         }
+        // Respondeu, mas o conteúdo está corrompido/inesperado: NÃO sobrescrever.
+        throw new Error("conteúdo do backend inválido");
       }
+      // backend acessível e realmente vazio -> primeira utilização
+      return defaultState();
     }catch(e){
       console.error("Erro ao carregar dados iniciais:", e);
+      // Falhou o carregamento: entra em modo seguro e NÃO deixa salvar,
+      // para não apagar dados que podem existir no backend.
+      safeMode = true;
+      return defaultState();
     }
-    return defaultState();
   }
 
   async function saveOnce(){
@@ -773,6 +786,16 @@
 
   async function saveState(){
     var indicator = document.getElementById("save-indicator");
+
+    if (safeMode){
+      if (indicator){
+        indicator.textContent = "⚠️ Modo seguro — não foi possível carregar os dados, edição bloqueada";
+        indicator.classList.add("save-error");
+        indicator.title = "Recarregue a página quando a conexão voltar. Nada é salvo agora para não apagar dados existentes.";
+      }
+      return;
+    }
+
     if (indicator){ indicator.textContent = "Salvando..."; indicator.classList.remove("save-error"); }
 
     if (!apiConfigured){
@@ -821,12 +844,28 @@
     if (!apiConfigured || isTypingSomewhere() || document.hidden) return;
     try{
       var raw = await fetchState();
-      if (raw && raw !== lastSyncedJSON){
+      if (raw){
         var parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.rounds)){
-          state = parsed;
-          lastSyncedJSON = raw;
-          renderAll();
+          // Se estávamos em modo seguro (carregamento inicial falhou) e agora
+          // conseguimos ler dados válidos, recuperamos: adotamos os dados reais
+          // e liberamos os salvamentos de novo.
+          if (safeMode){
+            safeMode = false;
+            state = parsed;
+            lastSyncedJSON = raw;
+            var ind = document.getElementById("save-indicator");
+            if (ind){ ind.textContent = "Tudo salvo ✓"; ind.classList.remove("save-error"); ind.title = ""; }
+            var warn = document.getElementById("storage-warning");
+            if (warn) warn.style.display = "none";
+            renderAll();
+            return;
+          }
+          if (raw !== lastSyncedJSON){
+            state = parsed;
+            lastSyncedJSON = raw;
+            renderAll();
+          }
         }
       }
     }catch(e){
@@ -849,6 +888,13 @@
         if (parsed && Array.isArray(parsed.rounds)){
           state = parsed;
           lastSyncedJSON = raw;
+          if (safeMode){
+            safeMode = false;
+            var ind = document.getElementById("save-indicator");
+            if (ind){ ind.textContent = "Tudo salvo ✓"; ind.classList.remove("save-error"); ind.title = ""; }
+            var warn = document.getElementById("storage-warning");
+            if (warn) warn.style.display = "none";
+          }
           renderAll();
         }
       }
@@ -1690,6 +1736,23 @@
   }
 
   // ---------- boot ----------
+  function showSafeModeBanner(){
+    var warn = document.getElementById("storage-warning");
+    if (warn){
+      warn.innerHTML = "⚠️ <b>Modo seguro ativado.</b> Não foi possível carregar os dados salvos agora " +
+        "(conexão ou planilha fora do ar). Para <b>proteger os dados existentes</b>, a edição está " +
+        "bloqueada e nada será salvo até a conexão voltar. O que aparece abaixo é apenas um exemplo — " +
+        "<b>não é o seu campeonato</b>. Assim que a conexão voltar, os dados reais aparecem sozinhos " +
+        "(ou clique em 🔄 Atualizar).";
+      warn.style.display = "block";
+    }
+    var indicator = document.getElementById("save-indicator");
+    if (indicator){
+      indicator.textContent = "⚠️ Modo seguro — edição bloqueada";
+      indicator.classList.add("save-error");
+    }
+  }
+
   async function init(){
     setupTabs();
     setupToolbar();
@@ -1697,6 +1760,7 @@
     state = await loadState();
     await ensureUsersInitialized();
     renderAll();
+    if (safeMode) showSafeModeBanner();
     if (apiConfigured) startPolling();
   }
 
